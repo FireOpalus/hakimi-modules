@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import re
 from abc import ABC, abstractmethod
+from contextlib import asynccontextmanager
 from typing import Any, Literal, final
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -85,6 +86,8 @@ class BaseModule(ABC):
     """Abstract capability module with enforced sensor sanitization and proactive lock hooks."""
 
     module_id: str = ""
+    display_name: str = ""
+    description: str = ""
     node_region: NodeRegion = "KR"
     attention_level: AttentionLevel = "LOW"
     proactive_paused: bool = False
@@ -93,6 +96,15 @@ class BaseModule(ABC):
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings
         self.proactive_paused = False
+
+    @asynccontextmanager
+    async def lifespan(self):
+        """Initialize local resources before workers start and release them on shutdown."""
+        yield
+
+    def admin_status(self, request) -> dict:
+        """Local, display-safe snapshot for the authenticated module detail page."""
+        return {}
 
     enabled: bool = True
 

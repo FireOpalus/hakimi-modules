@@ -1,12 +1,16 @@
 [submodule "platforms/qq"]
 	path = platforms/qq
 	url = ../hakimi-module-qq.git
+	legacy-flat-imports = true
 [submodule "platforms/bilibili"]
 	path = platforms/bilibili
 	url = ../hakimi-module-bilibili.git
+	legacy-flat-imports = true
 [submodule "platforms/minecraft"]
 	path = platforms/minecraft
 	url = ../hakimi-module-minecraft.git
+	legacy-flat-imports = true
 [submodule "platforms/weather"]
 	path = platforms/weather
 	url = ../hakimi-module-weather.git
+	legacy-flat-imports = true
