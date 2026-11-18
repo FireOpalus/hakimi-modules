@@ -132,6 +132,14 @@ class MinecraftSlotModule(BaseModule):
         self.mc_enabled: bool = False
         self.mc_configured: bool = False
         self.paused: bool = False
+        self.sync_node_switch = None
+
+    async def on_switch(self, service):
+        if not self.enabled:
+            world = service.world_state
+            await world.experience.mc_snapshot("", world.clock(), disconnected=True)
+        if self.sync_node_switch:
+            await self.sync_node_switch()
 
     def event_rules(self):
         from ..life_rules import Rule, build_from_video
@@ -474,6 +482,8 @@ class MinecraftSlotModule(BaseModule):
         }
 
     async def dispatch_goal(self, ticket: dict[str, Any]) -> GoalResult:
+        if not self.enabled:
+            return GoalResult(ok=False, module_id=self.module_id, reason="module_disabled")
         action_type = str(ticket.get("action_type", "")).strip()
         if self.remote_dispatcher is None:
             if action_type == "status":

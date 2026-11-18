@@ -52,6 +52,8 @@ class LifeSpeaker:
                 return Outcome("gated_skip", "news_already_shared_or_expired")
 
         module = self.service.modules.get(target_module)
+        if module and module.inactive_reason:
+            return Outcome("gated_skip", module.inactive_reason)
         parts = [await module.social_material(ticket)] if module else []
         if call.evidence:
             parts.append(

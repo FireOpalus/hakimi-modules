@@ -79,7 +79,8 @@ class Action:
 
 
 class ActionCatalog:
-    def __init__(self):
+    def __init__(self, inactive_reason: Callable[[str], str | None] = lambda _: None):
+        self.inactive_reason = inactive_reason
         self.actions: dict[str, Action] = {}
         self.owners: dict[str, str] = {}
         self.aliases: dict[Alias, str] = {}
@@ -117,6 +118,8 @@ class ActionCatalog:
         spec = self.actions.get(name or "")
         if not spec:
             raise ValueError("unknown_action")
+        if reason := self.inactive_reason(self.owners[spec.name]):
+            raise ValueError(reason)
         if ticket.get("origin", "legacy") not in spec.origins:
             raise ValueError("action_origin_forbidden")
         if spec.social != bool(ticket.get("target_scope")):
@@ -133,7 +136,9 @@ class ActionCatalog:
             if module_id is not None and self.owners[name] != module_id:
                 continue
             mode = modes.get(name, "active")
-            reason = "action_disabled" if mode == "off" else spec.unavailable()
+            reason = self.inactive_reason(self.owners[name]) or (
+                "action_disabled" if mode == "off" else spec.unavailable()
+            )
             if planner and (reason or "planner" not in spec.origins):
                 continue
             schema = spec.arguments.model_json_schema()
@@ -207,6 +212,8 @@ def reject_reason(exc: ValueError) -> str:
     # Pydantic diagnostics may include submitted values. Only send constant reason codes to admin.
     codes = {
         "unknown_action",
+        "module_disabled",
+        "weather_location_missing",
         "action_origin_forbidden",
         "invalid_action_audience",
         "incompatible_action",

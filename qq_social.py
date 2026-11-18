@@ -54,6 +54,19 @@ class QQSocialModule(BaseModule):
             self.preflight = QQPolicy(service).evaluate
             self.connected = service.proactive.connected
 
+    async def on_switch(self, service):
+        if not self.enabled:
+            async with service.store.transaction():
+                await service.store.db.execute(
+                    "UPDATE jobs SET status='cancelled',payload=NULL "
+                    "WHERE kind='message' AND status='pending'"
+                )
+                await service.store.db.execute(
+                    "UPDATE outbox SET status='cancelled',payload=NULL WHERE status='pending'"
+                )
+            await service.proactive._expire_and_disable()
+        service.proactive.wakeup.set()
+
     def actions(self) -> tuple[Action, ...]:
         aliases = {
             "qq_social": (
@@ -279,6 +292,8 @@ class QQSocialModule(BaseModule):
         return " ".join(parts)
 
     async def dispatch_goal(self, ticket: dict[str, Any]) -> GoalResult:
+        if not self.enabled:
+            return GoalResult(ok=False, module_id=self.module_id, reason="module_disabled")
         action_type = str(ticket.get("action_type", "")).strip()
         if self.proactive_paused and action_type != "status":
             return GoalResult(

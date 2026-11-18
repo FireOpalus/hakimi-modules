@@ -38,8 +38,15 @@ class WeatherModule(BaseModule):
 
     def __init__(self, settings, http, world):
         super().__init__(settings)
+        self.enabled = settings.weather_enabled
         self.http = http
         self.world = world
+
+    @property
+    def configuration_issue(self):
+        if self.settings.weather_latitude is None or self.settings.weather_longitude is None:
+            return "weather_location_missing"
+        return None
 
     def actions(self):
         return (
@@ -82,6 +89,8 @@ class WeatherModule(BaseModule):
         return f"最近天气 {at:%m-%d %H:%M}，{temperature} °C，天气代码 {code}"
 
     async def read(self, call: ActionCall) -> Outcome:
+        if reason := self.inactive_reason:
+            return Outcome("gated_skip", reason)
         local = datetime.fromtimestamp(call.now, ZoneInfo(self.settings.bot_timezone))
         hour_start = local.replace(minute=0, second=0, microsecond=0).timestamp()
         latest = await self.world.latest_event(self.module_id, "weather_observed")
@@ -105,6 +114,8 @@ class WeatherModule(BaseModule):
             return Outcome("gated_skip", "weather_unavailable")
         if not 0 <= call.now - observed.time < 3600:
             return Outcome("gated_skip", "weather_stale")
+        if not call.still_allowed():
+            return Outcome("gated_skip", "action_no_longer_eligible")
         await self.world.publish_event(
             self.module_id,
             "weather_observed",
@@ -117,6 +128,8 @@ class WeatherModule(BaseModule):
         return Outcome("done", "observation_recorded")
 
     async def daily_report(self, call: ActionCall) -> Outcome:
+        if reason := self.inactive_reason:
+            return Outcome("gated_skip", reason)
         sample = await self.world.latest_event(self.module_id, "weather_observed")
         if (
             sample is None

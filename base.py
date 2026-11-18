@@ -94,6 +94,16 @@ class BaseModule(ABC):
         self.settings = settings
         self.proactive_paused = False
 
+    enabled: bool = True
+
+    @property
+    def configuration_issue(self) -> str | None:
+        return None
+
+    @property
+    def inactive_reason(self) -> str | None:
+        return self.configuration_issue if self.enabled else "module_disabled"
+
     schedule_options: type[ScheduleOptions] = ScheduleOptions
     recipient_namespaces: tuple[str, ...] = ()
 
@@ -102,6 +112,10 @@ class BaseModule(ABC):
         return self.schedule_options.model_validate(
             {**defaults, **config.module_settings.get(self.module_id, {})}
         )
+
+    async def on_switch(self, service) -> None:
+        """Reconcile platform work after the module switch has been persisted."""
+        return None
 
     async def planning_context(self, service, config, now: float) -> dict:
         return {}
@@ -163,7 +177,8 @@ class ModuleRegistry:
 
     def __init__(self) -> None:
         self._modules: dict[str, BaseModule] = {}
-        self.catalog = ActionCatalog()
+        self.catalog = ActionCatalog(self.inactive_reason)
+        self.rule_owners: dict[str, str] = {}
         self.rules = {}
         self._recipients: dict[str, BaseModule] = {}
 
@@ -202,6 +217,7 @@ class ModuleRegistry:
         if len(names) != len(rules) or "diary.milestone" in names or names.intersection(self.rules):
             raise ValueError("duplicate event rule")
         self.catalog.install(module.module_id, actions)
+        self.rule_owners.update(dict.fromkeys(names, module.module_id))
         self.rules.update({rule.name: rule for rule in rules})
         self._recipients.update(dict.fromkeys(namespaces, module))
         self._modules[module.module_id] = module
@@ -213,6 +229,13 @@ class ModuleRegistry:
     def all(self) -> list[BaseModule]:
         """Return all registered modules in registration order."""
         return list(self._modules.values())
+
+    def inactive_reason(self, module_id: str) -> str | None:
+        module = self.get(module_id)
+        return module.inactive_reason if module else "module_not_registered"
+
+    def active(self) -> list[BaseModule]:
+        return [module for module in self.all() if module.inactive_reason is None]
 
     def normalize_recipient(self, scope: str) -> str | None:
         # Canonical addresses belong to one transport. Its checker also handles legacy aliases.
@@ -229,17 +252,19 @@ class ModuleRegistry:
 
     def permits_recipient(self, scope: str, config) -> bool:
         module = self._recipients.get(scope.partition(":")[0])
-        return bool(module and module.permits_recipient(scope, config))
+        return bool(
+            module and module.inactive_reason is None and module.permits_recipient(scope, config)
+        )
 
     async def context_data(self, *, limit: int, now: float, message: Message | None = None) -> dict:
         data = {}
-        for module in self.all():
+        for module in self.active():
             data.update(await module.context_data(limit=limit, now=now, message=message))
         return data
 
     async def collect_sensor_summaries(self) -> dict[str, str]:
         """Collect sanitized sensor summaries across all registered modules."""
         summaries: dict[str, str] = {}
-        for module in self._modules.values():
+        for module in self.active():
             summaries[module.module_id] = await module.get_sensor_summary()
         return summaries

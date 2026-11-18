@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from typing import Any, Literal
 
@@ -27,6 +28,7 @@ _MC_ALLOWED_DISPATCH_FIELDS = (
 class MinecraftNodeAdapter:
     def __init__(self, module: MinecraftSlotModule, transport, background):
         self.module = module
+        module.sync_node_switch = self.sync_switch
         self.s = module.settings
         self.world_state = module.world_state
         self.store = self.world_state.store
@@ -71,12 +73,12 @@ class MinecraftNodeAdapter:
         except Exception:
             return
         mc_mod = self.module
-        if isinstance(data, dict):
+        if isinstance(data, dict) and self.module.enabled:
             await self._apply_mc_status_data(mc_mod, data)
 
     async def on_state(self, connected: bool) -> None:
         if connected:
-            self.background(self._sync_mc_node_status())
+            self.background(self.sync_switch())
             return
         self.module.bridge_ready = False
         if self.module.snapshot.connected:
@@ -85,6 +87,21 @@ class MinecraftNodeAdapter:
             )
         ws = await self._ensure_world_state_ready()
         await ws.experience.mc_snapshot("", ws.clock(), disconnected=True)
+
+    async def sync_switch(self):
+        transport = self.transport()
+        if not transport or not transport.connected():
+            return
+        if self.module.enabled:
+            await self._sync_mc_node_status()
+        else:
+            # Stop an existing goal without changing the operator's separate pause setting.
+            try:
+                result = await transport.call("mc.dispatch_goal", {"action_type": "stop"})
+                if not isinstance(result, dict) or not result.get("ok"):
+                    logging.getLogger("hakimi").warning("event=mc_module_stop_not_confirmed")
+            except (Rejected, TimeoutError, ConnectionError):
+                logging.getLogger("hakimi").warning("event=mc_module_stop_not_confirmed")
 
     async def dispatch(self, ticket: dict[str, Any]) -> dict[str, Any]:
         module, transport = self.module, self.transport()
@@ -155,6 +172,8 @@ class MinecraftNodeAdapter:
         }
 
     async def on_event(self, frame: dict[str, Any]) -> str:
+        if not self.module.enabled:
+            return "ignored"
         event_name = frame.get("event")
         payload = frame.get("payload") if isinstance(frame.get("payload"), dict) else {}
         if event_name == "mc.snapshot":

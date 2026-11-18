@@ -86,6 +86,12 @@ class BilibiliSurfModule(BaseModule):
             return self.attention_level, "curious"
         return None
 
+    async def on_switch(self, service):
+        if not self.enabled:
+            # In-flight reads must also observe a short off/on interval.
+            service.bili_watcher.policy_epoch += 1
+            await service.world_state.experience.bili_reading(False, service.life_engine.clock())
+
     def patrol_unavailable(self) -> str | None:
         if self.backend_mode == "remote_node":
             return None if self.remote_fetcher else "remote_fetcher_unconfigured"
@@ -222,6 +228,8 @@ class BilibiliSurfModule(BaseModule):
         return " ".join(parts)
 
     async def dispatch_goal(self, ticket: dict[str, Any]) -> GoalResult:
+        if not self.enabled:
+            return GoalResult(ok=False, module_id=self.module_id, reason="module_disabled")
         action_type = str(ticket.get("action_type", "")).strip()
         if self.proactive_paused and action_type != "status":
             return GoalResult(
