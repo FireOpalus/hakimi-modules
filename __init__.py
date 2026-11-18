@@ -1,4 +1,6 @@
-"""Hakimi capability modules and registry."""
+"""Shared capability SDK and the stable Python namespace for the four platform repositories."""
+
+from pathlib import Path
 
 from .base import (
     ATTENTION_RANK,
@@ -9,9 +11,15 @@ from .base import (
     NodeRegion,
     sanitize_sensor_text,
 )
-from .bilibili_surf import BilibiliSurfModule
-from .minecraft_slot import MinecraftSlotModule, MinecraftSnapshot
-from .qq_social import QQSocialModule
+
+# Each pinned repository contributes files to hakimi.modules. Keep their original
+# import names so integrations, type identities and serialized references survive the split.
+_platforms = Path(__file__).parent / "platforms"
+__path__.extend(str(_platforms / name) for name in ("qq", "bilibili", "minecraft", "weather"))
+
+from .bilibili_surf import BilibiliSurfModule  # noqa: E402
+from .minecraft_slot import MinecraftSlotModule, MinecraftSnapshot  # noqa: E402
+from .qq_social import QQSocialModule  # noqa: E402
 
 __all__ = [
     "ATTENTION_RANK",
