@@ -90,6 +90,10 @@ class ActionCatalog:
         for spec in actions:
             if not NAME.fullmatch(spec.name) or spec.name in names:
                 raise ValueError(f"invalid or duplicate action: {spec.name}")
+            if "query" in spec.origins and (
+                spec.social or spec.owner_only or spec.budget_lane or spec.arguments is not NoArgs
+            ):
+                raise ValueError("module queries must be internal, unmetered and take no arguments")
             if spec.background_sensor and (
                 spec.origins != {"timer"} or spec.social or spec.budget_lane or spec.window != "any"
             ):

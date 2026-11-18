@@ -43,4 +43,6 @@ def create_module(service):
 
 模块可通过 `actions()`、`schedules()` 和 `event_rules()` 参与世界引擎。声明 `schedule_options` 即可得到后台设置表单。需要恢复本地状态或释放资源时，可覆盖异步上下文管理器 `lifespan()`，它在开关恢复后、后台工作任务启动前进入，并在服务结束时退出。
 
+如果其他模块或对话需要同步取得只读数据，可以声明允许 `"query"` 来源的无参数内部动作。其他模块通过 `result = await service.life_engine.query("weather.read")` 即可读取天气，先检查 `result.status == "done"`，再使用 `result.details["observation"]`。对话路由只会向 AI 提供当前可用的查询能力，查询同样受模块开关与单项动作开关控制。
+
 需要专用管理接口时，`plugin.py` 还可导出仅包含 HTTP 路由的 FastAPI `admin_router`。宿主会挂载到受管理口令保护的 `/admin/api/life/modules/<目录名>` 下，并保留通用模块接口。天气模块的地点查询是一个完整示例。[天气模块入口](https://github.com/FireOpalus/hakimi-module-weather/blob/main/plugin.py)
