@@ -191,15 +191,36 @@ class ModuleRegistry:
 
     def __init__(self) -> None:
         self._modules: dict[str, BaseModule] = {}
+        self.systems = {}
+        self.public_event_observers = {}
         self.thinking_scenes = {scene.key: scene for scene in CORE_THINKING_SCENES}
         self.catalog = ActionCatalog(self.inactive_reason)
         self.rule_owners: dict[str, str] = {}
         self.rules = {}
         self._recipients: dict[str, BaseModule] = {}
 
+    def register_system(self, module) -> None:
+        if (
+            not module.module_id
+            or module.module_id in self.systems
+            or module.module_id in self._modules
+        ):
+            raise ValueError("module_id must be non-empty and unique")
+        scenes = self._new_scenes(module)
+        observers = module.public_event_observers()
+        if observers.keys() & (self.public_event_observers.keys() | self.rules.keys()):
+            raise ValueError("duplicate event rule")
+        self.systems[module.module_id] = module
+        self.thinking_scenes.update(scenes)
+        self.public_event_observers.update(observers)
+
     def register(self, module: BaseModule) -> None:
         """Register a capability module by its unique module_id."""
-        if not module.module_id or module.module_id in self._modules:
+        if (
+            not module.module_id
+            or module.module_id in self._modules
+            or module.module_id in self.systems
+        ):
             raise ValueError("module_id must be non-empty and unique")
         namespaces = set(module.recipient_namespaces)
         if (
@@ -208,12 +229,7 @@ class ModuleRegistry:
             or any(not re.fullmatch(r"[a-z][a-z0-9_]*", name) for name in namespaces)
         ):
             raise ValueError("invalid or duplicate recipient namespace")
-        scenes = {scene.key: scene for scene in module.thinking_scenes}
-        if (
-            len(scenes) != len(module.thinking_scenes)
-            or self.thinking_scenes.keys() & scenes.keys()
-        ):
-            raise ValueError("duplicate thinking scene")
+        scenes = self._new_scenes(module)
         actions = module.actions()
         for action in actions:
             for quota in action.quota_rules():
@@ -235,7 +251,11 @@ class ModuleRegistry:
                 raise ValueError("daily schedule requires a ScheduleTime field")
         rules = module.event_rules()
         names = {rule.name for rule in rules}
-        if len(names) != len(rules) or "diary.milestone" in names or names.intersection(self.rules):
+        if (
+            len(names) != len(rules)
+            or names.intersection(self.public_event_observers)
+            or names.intersection(self.rules)
+        ):
             raise ValueError("duplicate event rule")
         self.catalog.install(module.module_id, actions)
         self.rule_owners.update(dict.fromkeys(names, module.module_id))
@@ -243,6 +263,15 @@ class ModuleRegistry:
         self._recipients.update(dict.fromkeys(namespaces, module))
         self._modules[module.module_id] = module
         self.thinking_scenes.update(scenes)
+
+    def _new_scenes(self, module):
+        scenes = {scene.key: scene for scene in module.thinking_scenes}
+        if (
+            len(scenes) != len(module.thinking_scenes)
+            or self.thinking_scenes.keys() & scenes.keys()
+        ):
+            raise ValueError("duplicate thinking scene")
+        return scenes
 
     def get(self, module_id: str) -> BaseModule | None:
         """Return the registered module matching module_id, or None."""

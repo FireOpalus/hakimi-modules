@@ -11,6 +11,8 @@
 
 本仓库维护模块清单、动作契约和调度类型。加载器读取 `.gitmodules`，按目录分别导入 `hakimi.modules.platforms.<目录名>.plugin`。不同模块可使用同名的内部文件，通过相对导入引用。原有四个模块的 `legacy-flat-imports` 用于兼容已有的 Python 导入路径。
 
+常驻系统服务随主仓 `src/hakimi/system_modules/` 发布。启动时按依赖顺序自动注册，后台根据声明展示状态与思考场景。需要平台连接、启停开关或世界引擎动作的扩展，使用下方的平台插件入口。
+
 [主仓](https://github.com/FireOpalus/hakimi-surf)把本目录固定在 `src/hakimi/modules`。首次克隆使用 `git clone --recurse-submodules`，已有检出在拉取后运行 `git submodule update --init --recursive`。宿主、持久化数据和部署配置由主仓管理。
 
 单独升级一个模块时，先推送对应实现仓库的提交，然后在本仓库记录该子模块的新指针。最后在主仓运行集成测试并提交目录指针。回滚时可以选择任一先前验证过的组合。
