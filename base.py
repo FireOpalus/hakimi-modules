@@ -96,10 +96,12 @@ class BaseModule(ABC):
     attention_level: AttentionLevel = "LOW"
     proactive_paused: bool = False
     settings: Settings | None = None
+    _registry: ModuleRegistry | None = None
 
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings
         self.proactive_paused = False
+        self._registry = None
 
     @asynccontextmanager
     async def lifespan(self):
@@ -216,6 +218,79 @@ class BaseModule(ABC):
         """Resume autonomous proactive behavior when focus drops below HIGH."""
         self.proactive_paused = False
 
+    def planning_fingerprint(self) -> str:
+        """Return an optional low-frequency actionable state digest for planner wakeups."""
+        return ""
+
+    async def post_ledger_event(
+        self,
+        event_type: str,
+        summary: str,
+        *,
+        payload: dict[str, Any] | None = None,
+        target_module: str = "",
+        dedupe_key: str | None = None,
+        due_at: float | None = None,
+        ttl_seconds: float = 3 * 86400.0,
+        visibility: Literal["public", "owner_private"] = "public",
+        now: float | None = None,
+    ):
+        """Post or update a cross-period stateful commitment in the built-in event ledger."""
+        registry = getattr(self, "_registry", None)
+        ledger = getattr(registry, "event_ledger", None) if registry is not None else None
+        if ledger is None:
+            raise RuntimeError("event_ledger_unavailable")
+        return await ledger.post(
+            self.module_id,
+            event_type,
+            summary,
+            payload=payload,
+            target_module=target_module,
+            dedupe_key=dedupe_key,
+            due_at=due_at,
+            ttl_seconds=ttl_seconds,
+            visibility=visibility,
+            now=now,
+        )
+
+    async def read_ledger_events(
+        self,
+        *,
+        source_module: str | None = None,
+        target_module: str | None = None,
+        event_type: str | None = None,
+        only_due: bool = False,
+        limit: int = 20,
+        now: float | None = None,
+    ) -> list[Any]:
+        """Read public pending commitments from the built-in event ledger."""
+        registry = getattr(self, "_registry", None)
+        ledger = getattr(registry, "event_ledger", None) if registry is not None else None
+        if ledger is None:
+            return []
+        return await ledger.read(
+            source_module=source_module,
+            target_module=target_module,
+            event_type=event_type,
+            include_owner_private=False,
+            only_due=only_due,
+            limit=limit,
+            now=now,
+        )
+
+    async def consume_ledger_event(self, event_id_or_key: str, *, now: float | None = None) -> bool:
+        """Consume a completed public commitment in the built-in event ledger."""
+        registry = getattr(self, "_registry", None)
+        ledger = getattr(registry, "event_ledger", None) if registry is not None else None
+        if ledger is None:
+            return False
+        return await ledger.consume(
+            event_id_or_key,
+            consumer=self.module_id,
+            allow_owner_private=False,
+            now=now,
+        )
+
 
 class ModuleRegistry:
     """In-memory registry of capability modules for sensor collection and attention locking."""
@@ -232,6 +307,7 @@ class ModuleRegistry:
         self.rule_owners: dict[str, str] = {}
         self.rules = {}
         self._recipients: dict[str, BaseModule] = {}
+        self.event_ledger: Any = None
 
     def register_system(self, module) -> None:
         if (
@@ -310,6 +386,7 @@ class ModuleRegistry:
         self.chat_platforms.update(dict.fromkeys(protocols, module))
         if supplement:
             self._owner_slots[module.module_id] = supplement[1]
+        module._registry = self
         self._modules[module.module_id] = module
         self.thinking_scenes.update(scenes)
 
