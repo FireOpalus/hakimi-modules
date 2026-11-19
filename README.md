@@ -50,3 +50,11 @@ def create_module(service):
 如果其他模块或对话需要同步取得只读数据，可以声明允许 `"query"` 来源的无参数内部动作。其他模块通过 `result = await service.life_engine.query("weather.read")` 即可读取天气，先检查 `result.status == "done"`，再使用 `result.details["observation"]`。对话路由只会向 AI 提供当前可用的查询能力，查询同样受模块开关与单项动作开关控制。
 
 需要专用管理接口时，`plugin.py` 还可导出仅包含 HTTP 路由的 FastAPI `admin_router`。宿主会挂载到受管理口令保护的 `/admin/api/life/modules/<目录名>` 下，并保留通用模块接口。天气模块的地点查询是一个完整示例。[天气模块入口](https://github.com/FireOpalus/hakimi-module-weather/blob/main/plugin.py)
+
+### 社交通道
+
+在 `chat_platforms` 注册全局唯一的协议名。完成平台的签名验证后，构造规范化的 `Message`，调用 `await service.accept_from(self, message)`。实现 `authorize_chat(message, settings, *, bot_exempt=False)` 来检查本模块的账号、群或私聊准入。后台会按注册结果生成模块入口和会话隐私设置。
+
+在 `send_chat(message, text, *, before_send)` 中，实际提交前调用 `await before_send()`。允许提交时按字面文本发送，返回平台确认的非空消息 ID 字符串。需要投递 Owner 日报时实现 `chat_connected(platform)` 并配置一个已验证的 Owner 绑定。群记忆同步另外实现 `permits_memory_mirror(message, settings)`，按本平台授权范围核验账号和群组。准入、群镜像和主动投递资格默认关闭。插件可用 `permits_chat_export(message, consumer)` 授权特定会话供 `patrol_diary` 归档或供 `bilibili_surf` 提取选片话题。这些额外的读取权限默认关闭。
+
+`context_data(limit=..., now=..., message=...)` 提供经过授权的只读素材，`message` 只携带目标身份，空值表示公开用途。`public_patrol_entry(event)` 可为本模块的公开事件返回稳定业务键及已审核的巡逻正文，相同业务键只归档一次。`current_activity()` 提供本地活动状态。耗费精力的动作在 `Action` 上声明 `effortful=True`，低精力时由调度器统一过滤。

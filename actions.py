@@ -63,6 +63,7 @@ class Action:
     reuses_paid_work: Callable[[float], Awaitable[bool]] | None = None
     window: Literal["any", "active", "closing"] = "any"
     interrupts_focus: bool = False
+    effortful: bool = False
     background_sensor: bool = False
     # Paid or social actions share the daily allowance by default; () opts out.
     quotas: tuple[ActivityQuota, ...] | None = None
@@ -156,6 +157,7 @@ class ActionCatalog:
                     "description": spec.description,
                     "audience": audience,
                     "budget_lane": spec.budget_lane,
+                    "effortful": spec.effortful,
                     "arguments": schema["properties"],
                     "required": schema.get("required", []),
                     "mode": mode,

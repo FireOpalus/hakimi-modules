@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import html
+import json
+import logging
 import re
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
@@ -104,6 +106,27 @@ class BaseModule(ABC):
         """Initialize local resources before workers start and release them on shutdown."""
         yield
 
+    chat_platforms: tuple[str, ...] = ()
+    admin_panel: str | None = None
+
+    def authorize_chat(self, message, settings, *, bot_exempt=False) -> bool:
+        return False
+
+    def chat_connected(self, platform: str) -> bool:
+        """Adapters that support unsolicited delivery report their live connection here."""
+        return False
+
+    def permits_chat_export(self, message: Message, consumer: str) -> bool:
+        """Permit a named consumer to read this admitted conversation for a separate purpose."""
+        return False
+
+    def permits_memory_mirror(self, message, settings) -> bool:
+        return False
+
+    async def send_chat(self, message, text, *, before_send):
+        """Send literal text after the final gate and return the platform message ID as a string."""
+        raise NotImplementedError
+
     def admin_status(self, request) -> dict:
         """Local, display-safe snapshot for the authenticated module detail page."""
         return {}
@@ -151,6 +174,14 @@ class BaseModule(ABC):
     def actions(self) -> tuple[Action, ...]:
         return ()
 
+    async def public_patrol_entry(self, event):
+        """Optionally resolve a public event to its durable diary key and screened text."""
+        return None
+
+    async def current_activity(self) -> str | None:
+        """Local status only. This hook must not call an external service."""
+        return None
+
     async def social_material(self, ticket: dict) -> str:
         return await self.get_sensor_summary()
 
@@ -189,8 +220,11 @@ class BaseModule(ABC):
 class ModuleRegistry:
     """In-memory registry of capability modules for sensor collection and attention locking."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, owner_delivery=None) -> None:
+        self.owner_delivery = owner_delivery
+        self._owner_slots = {}
         self._modules: dict[str, BaseModule] = {}
+        self.chat_platforms = {}
         self.systems = {}
         self.public_event_observers = {}
         self.thinking_scenes = {scene.key: scene for scene in CORE_THINKING_SCENES}
@@ -222,15 +256,27 @@ class ModuleRegistry:
             or module.module_id in self.systems
         ):
             raise ValueError("module_id must be non-empty and unique")
+        protocols = set(module.chat_platforms)
+        if (
+            len(protocols) != len(module.chat_platforms)
+            or protocols.intersection(self.chat_platforms)
+            or any(not re.fullmatch(r"[a-z][a-z0-9_]{0,47}", p) for p in protocols)
+            or (protocols.intersection({"onebot", "qq"}) and module.module_id != "qq_social")
+        ):
+            raise ValueError("invalid or duplicate chat platform")
         namespaces = set(module.recipient_namespaces)
         if (
-            len(namespaces) != len(module.recipient_namespaces)
+            "boundowner" in namespaces
+            or len(namespaces) != len(module.recipient_namespaces)
             or namespaces.intersection(self._recipients)
             or any(not re.fullmatch(r"[a-z][a-z0-9_]*", name) for name in namespaces)
         ):
             raise ValueError("invalid or duplicate recipient namespace")
         scenes = self._new_scenes(module)
         actions = module.actions()
+        supplement = self.owner_delivery.module_timer(module) if self.owner_delivery else None
+        if supplement:
+            actions = (*actions, supplement[0])
         for action in actions:
             for quota in action.quota_rules():
                 if quota.counter in {"total", "counted"}:
@@ -261,6 +307,9 @@ class ModuleRegistry:
         self.rule_owners.update(dict.fromkeys(names, module.module_id))
         self.rules.update({rule.name: rule for rule in rules})
         self._recipients.update(dict.fromkeys(namespaces, module))
+        self.chat_platforms.update(dict.fromkeys(protocols, module))
+        if supplement:
+            self._owner_slots[module.module_id] = supplement[1]
         self._modules[module.module_id] = module
         self.thinking_scenes.update(scenes)
 
@@ -288,7 +337,14 @@ class ModuleRegistry:
     def active(self) -> list[BaseModule]:
         return [module for module in self.all() if module.inactive_reason is None]
 
+    def schedules_for(self, module):
+        slots = module.schedules()
+        extra = self._owner_slots.get(module.module_id)
+        return (*slots, extra) if extra else slots
+
     def normalize_recipient(self, scope: str) -> str | None:
+        if self.owner_delivery and self.owner_delivery.external_scope(scope):
+            return scope
         # Canonical addresses belong to one transport. Its checker also handles legacy aliases.
         owner = self._recipients.get(scope.partition(":")[0])
         providers = (
@@ -302,15 +358,48 @@ class ModuleRegistry:
         return candidates.pop() if len(candidates) == 1 else None
 
     def permits_recipient(self, scope: str, config) -> bool:
+        if self.owner_delivery and self.owner_delivery.external_scope(scope):
+            return self.owner_delivery.delivery_enabled
         module = self._recipients.get(scope.partition(":")[0])
         return bool(
             module and module.inactive_reason is None and module.permits_recipient(scope, config)
         )
 
     async def context_data(self, *, limit: int, now: float, message: Message | None = None) -> dict:
+        # Context providers receive an authenticated destination without message content.
+        audience = None
+        if message is not None:
+            audience = Message(
+                platform=message.platform,
+                bot_id=message.bot_id,
+                kind=message.kind,
+                conversation_id=message.conversation_id,
+                user_id=message.user_id if message.kind == "private" else "0",
+                text="",
+                event_id="context",
+                created_at=now,
+                addressed=False,
+            )
         data = {}
         for module in self.active():
-            data.update(await module.context_data(limit=limit, now=now, message=message))
+            try:
+                material = dict(await module.context_data(limit=limit, now=now, message=audience))
+                # Saved prompts and their continuation digests use this original Bili field.
+                if module.module_id == "bilibili_surf" and "recent_bili_surfed" in material:
+                    data["recent_bili_surfed"] = material.pop("recent_bili_surfed")
+                if material:
+                    excerpt = sanitize_sensor_text(
+                        json.dumps(material, ensure_ascii=False, allow_nan=False),
+                        module.settings,
+                        max_tokens=180,
+                    )
+                    data.setdefault("module_context", {})[module.module_id] = excerpt
+            except Exception as exc:
+                logging.getLogger(__name__).warning(
+                    "event=context_provider_unavailable module=%s error=%s",
+                    module.module_id,
+                    type(exc).__name__,
+                )
         return data
 
     async def collect_sensor_summaries(self) -> dict[str, str]:
