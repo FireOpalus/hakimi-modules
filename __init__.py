@@ -2,6 +2,7 @@
 
 from importlib import import_module
 
+from ..thinking_policy import ThinkingScene
 from .base import (
     ATTENTION_RANK,
     AttentionLevel,
@@ -52,6 +53,7 @@ __all__ = [
     "ATTENTION_RANK",
     "AttentionLevel",
     "BaseModule",
+    "ThinkingScene",
     "GoalResult",
     "ModuleRegistry",
     "NodeRegion",

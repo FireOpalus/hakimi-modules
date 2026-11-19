@@ -14,6 +14,7 @@ from ..config import Settings
 from ..context_budget import truncate_tokens
 from ..models import Message
 from ..security import clean_text, configured_secrets
+from ..thinking_policy import CORE_THINKING_SCENES, ThinkingScene
 from .actions import Action, ActionCatalog, DailyAction
 from .scheduling import CLOCK_PATTERN, LocalActivity, ScheduleOptions
 
@@ -85,6 +86,7 @@ def sanitize_sensor_text(
 class BaseModule(ABC):
     """Abstract capability module with enforced sensor sanitization and proactive lock hooks."""
 
+    thinking_scenes: tuple[ThinkingScene, ...] = ()
     module_id: str = ""
     display_name: str = ""
     description: str = ""
@@ -189,6 +191,7 @@ class ModuleRegistry:
 
     def __init__(self) -> None:
         self._modules: dict[str, BaseModule] = {}
+        self.thinking_scenes = {scene.key: scene for scene in CORE_THINKING_SCENES}
         self.catalog = ActionCatalog(self.inactive_reason)
         self.rule_owners: dict[str, str] = {}
         self.rules = {}
@@ -205,6 +208,12 @@ class ModuleRegistry:
             or any(not re.fullmatch(r"[a-z][a-z0-9_]*", name) for name in namespaces)
         ):
             raise ValueError("invalid or duplicate recipient namespace")
+        scenes = {scene.key: scene for scene in module.thinking_scenes}
+        if (
+            len(scenes) != len(module.thinking_scenes)
+            or self.thinking_scenes.keys() & scenes.keys()
+        ):
+            raise ValueError("duplicate thinking scene")
         actions = module.actions()
         for action in actions:
             for quota in action.quota_rules():
@@ -233,6 +242,7 @@ class ModuleRegistry:
         self.rules.update({rule.name: rule for rule in rules})
         self._recipients.update(dict.fromkeys(namespaces, module))
         self._modules[module.module_id] = module
+        self.thinking_scenes.update(scenes)
 
     def get(self, module_id: str) -> BaseModule | None:
         """Return the registered module matching module_id, or None."""
