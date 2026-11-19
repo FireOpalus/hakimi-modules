@@ -57,4 +57,4 @@ def create_module(service):
 
 在 `send_chat(message, text, *, before_send)` 中，实际提交前调用 `await before_send()`。允许提交时按字面文本发送，返回平台确认的非空消息 ID 字符串。需要投递 Owner 日报时实现 `chat_connected(platform)` 并配置一个已验证的 Owner 绑定。群记忆同步另外实现 `permits_memory_mirror(message, settings)`，按本平台授权范围核验账号和群组。准入、群镜像和主动投递资格默认关闭。插件可用 `permits_chat_export(message, consumer)` 授权特定会话供 `patrol_diary` 归档或供 `bilibili_surf` 提取选片话题。这些额外的读取权限默认关闭。
 
-`context_data(limit=..., now=..., message=...)` 提供经过授权的只读素材，`message` 只携带目标身份，空值表示公开用途。`public_patrol_entry(event)` 可为本模块的公开事件返回稳定业务键及已审核的巡逻正文，相同业务键只归档一次。`current_activity()` 提供本地活动状态。耗费精力的动作在 `Action` 上声明 `effortful=True`，低精力时由调度器统一过滤。
+`context_data(limit=..., now=..., message=...)` 提供经过授权的只读素材，`message` 只携带目标身份，空值表示公开用途。`public_patrol_entry(event)` 可为本模块的公开事件返回稳定业务键及已审核的巡逻正文，相同业务键只归档一次。`current_activity()` 提供本地活动状态。耗费精力的动作在 `Action` 上声明 `effortful=True`，供规划器结合当天的精力自行取舍。
