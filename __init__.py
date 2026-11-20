@@ -32,14 +32,18 @@ def __getattr__(name):
     return getattr(import_module(f".{_legacy_exports[name]}", __name__), name)
 
 
-def platform_entries():
+def platform_entries(exclude: set[str] | frozenset[str] = frozenset()):
     for platform in PLATFORMS:
+        if platform.name in exclude:
+            continue
         check_entry(CATALOG, platform)
         yield platform, import_module(f".platforms.{platform.name}.plugin", __name__)
 
 
 def install_modules(service) -> None:
-    for platform, entry in platform_entries():
+    raw = getattr(getattr(service, "s", None), "external_plugins", ()) or ()
+    exclude = frozenset({raw} if isinstance(raw, str) else raw)
+    for platform, entry in platform_entries(exclude=exclude):
         factory = getattr(entry, "create_module", None)
         if not callable(factory):
             raise ValueError(f"{platform.path}/plugin.py must export create_module(service)")
