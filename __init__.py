@@ -42,7 +42,10 @@ def platform_entries(exclude: set[str] | frozenset[str] = frozenset()):
 
 def install_modules(service) -> None:
     raw = getattr(getattr(service, "s", None), "external_plugins", ()) or ()
-    exclude = frozenset({raw} if isinstance(raw, str) else raw)
+    items = {raw} if isinstance(raw, str) else set(raw)
+    if "bilibili_surf" in items:
+        items.add("bilibili")
+    exclude = frozenset(items)
     for platform, entry in platform_entries(exclude=exclude):
         factory = getattr(entry, "create_module", None)
         if not callable(factory):
