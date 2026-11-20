@@ -303,6 +303,7 @@ class ModuleRegistry:
         self.systems = {}
         self.public_event_observers = {}
         self.thinking_scenes = {scene.key: scene for scene in CORE_THINKING_SCENES}
+        self._module_scenes: dict[str, tuple[str, ...]] = {}
         self.catalog = ActionCatalog(self.inactive_reason)
         self.rule_owners: dict[str, str] = {}
         self.rules = {}
@@ -388,7 +389,43 @@ class ModuleRegistry:
             self._owner_slots[module.module_id] = supplement[1]
         module._registry = self
         self._modules[module.module_id] = module
+        self._module_scenes[module.module_id] = tuple(scenes)
         self.thinking_scenes.update(scenes)
+
+    def unregister(self, module_id: str) -> bool:
+        """Unregister a non-system capability module and cleanly undo register() state."""
+        if module_id in self.systems:
+            raise ValueError(f"cannot unregister system module: {module_id}")
+        module = self._modules.pop(module_id, None)
+        if module is None:
+            return False
+
+        self.catalog.uninstall(module_id)
+
+        core_keys = {scene.key for scene in CORE_THINKING_SCENES}
+        system_keys = {
+            scene.key for sys_mod in self.systems.values() for scene in sys_mod.thinking_scenes
+        }
+        scene_keys = self._module_scenes.pop(module_id, None)
+        if scene_keys is None:
+            scene_keys = tuple(scene.key for scene in module.thinking_scenes)
+        for key in scene_keys:
+            if key not in core_keys and key not in system_keys:
+                self.thinking_scenes.pop(key, None)
+
+        for platform in [name for name, owner in self.chat_platforms.items() if owner is module]:
+            self.chat_platforms.pop(platform, None)
+
+        for namespace in [name for name, owner in self._recipients.items() if owner is module]:
+            self._recipients.pop(namespace, None)
+
+        for rule_name in [name for name, owner in self.rule_owners.items() if owner == module_id]:
+            self.rule_owners.pop(rule_name, None)
+            self.rules.pop(rule_name, None)
+
+        self._owner_slots.pop(module_id, None)
+        module._registry = None
+        return True
 
     def _new_scenes(self, module):
         scenes = {scene.key: scene for scene in module.thinking_scenes}

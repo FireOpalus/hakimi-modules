@@ -109,6 +109,17 @@ class ActionCatalog:
             self.owners[spec.name] = module_id
             self.aliases.update(dict.fromkeys(spec.aliases, spec.name))
 
+    def uninstall(self, module_id: str) -> None:
+        """Remove all actions, owners, and aliases registered by module_id."""
+        owned = {name for name, owner in self.owners.items() if owner == module_id}
+        if not owned:
+            return
+        for name in owned:
+            self.actions.pop(name, None)
+            self.owners.pop(name, None)
+        for alias in [key for key, target in self.aliases.items() if target in owned]:
+            self.aliases.pop(alias, None)
+
     def old_name(self, ticket: dict) -> str | None:
         return self.aliases.get(
             (ticket["target_module"], ticket["action_type"], bool(ticket["target_scope"]))
