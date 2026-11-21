@@ -109,6 +109,8 @@ class BaseModule(ABC):
         yield
 
     chat_platforms: tuple[str, ...] = ()
+    supports_voice: bool = False
+    preferred_voice_format: str = "ogg_opus"
     admin_panel: str | None = None
 
     def authorize_chat(self, message, settings, *, bot_exempt=False) -> bool:
@@ -127,6 +129,19 @@ class BaseModule(ABC):
 
     async def send_chat(self, message, text, *, before_send):
         """Send literal text after the final gate and return the platform message ID as a string."""
+        raise NotImplementedError
+
+    async def send_voice(
+        self,
+        message: Message,
+        audio_bytes: bytes,
+        *,
+        fmt: str,
+        mime_type: str,
+        duration_ms: int | None = None,
+        before_send=None,
+    ) -> str:
+        """Send a voice message after the final gate and return the platform message ID."""
         raise NotImplementedError
 
     def admin_status(self, request) -> dict:
