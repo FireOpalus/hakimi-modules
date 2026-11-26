@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import html
 import json
 import logging
@@ -111,6 +112,8 @@ class BaseModule(ABC):
     chat_platforms: tuple[str, ...] = ()
     supports_voice: bool = False
     preferred_voice_format: str = "ogg_opus"
+    supports_presence: bool = False
+    presence_platforms: tuple[str, ...] = ()
     admin_panel: str | None = None
 
     def authorize_chat(self, message, settings, *, bot_exempt=False) -> bool:
@@ -119,6 +122,19 @@ class BaseModule(ABC):
     def chat_connected(self, platform: str) -> bool:
         """Adapters that support unsolicited delivery report their live connection here."""
         return False
+
+    def presence_enabled(self) -> bool:
+        """Return whether automatic public presence updates are currently enabled."""
+        return False
+
+    async def apply_presence(
+        self,
+        mood_text: str,
+        *,
+        kind: Literal["life_block", "digest", "patrol", "chat"] = "life_block",
+    ) -> dict[str, Any] | None:
+        """Optionally reflect current mood/activity onto the platform's public presence."""
+        return None
 
     def permits_chat_export(self, message: Message, consumer: str) -> bool:
         """Permit a named consumer to read this admitted conversation for a separate purpose."""
@@ -179,6 +195,9 @@ class BaseModule(ABC):
 
     def permits_recipient(self, scope: str, config) -> bool:
         return True
+
+    def proactive_groups(self) -> list[str]:
+        return []
 
     def local_activity(
         self, context: dict, available: set[str], unfunded: bool
@@ -466,29 +485,154 @@ class ModuleRegistry:
     def active(self) -> list[BaseModule]:
         return [module for module in self.all() if module.inactive_reason is None]
 
+    def _presence_module(self, platform: str) -> BaseModule | None:
+        module = self.chat_platforms.get(platform)
+        if module is None or module.inactive_reason is not None:
+            return None
+        if not bool(getattr(module, "supports_presence", False)):
+            return None
+        allowed_platforms = getattr(module, "presence_platforms", ())
+        if allowed_platforms and platform not in allowed_platforms:
+            return None
+        return module
+
+    def supports_presence_for(self, platform: str) -> bool:
+        return self._presence_module(platform) is not None
+
+    def presence_enabled_for(self, platform: str) -> bool:
+        module = self._presence_module(platform)
+        return bool(module is not None and module.presence_enabled())
+
+    async def apply_presence(
+        self,
+        mood_text: str,
+        *,
+        kind: Literal["life_block", "digest", "patrol", "chat"] = "life_block",
+        platform: str | None = None,
+    ) -> dict[str, Any] | None:
+        if platform is not None:
+            module = self._presence_module(platform)
+            if module is None:
+                return None
+            try:
+                return await module.apply_presence(mood_text, kind=kind)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logging.getLogger(__name__).warning(
+                    "event=presence_apply_failed module=%s platform=%s kind=%s error=%s",
+                    module.module_id,
+                    platform,
+                    kind,
+                    type(exc).__name__,
+                )
+                return None
+
+        results: dict[str, Any] = {}
+        for module in self.active():
+            if not getattr(module, "supports_presence", False):
+                continue
+            try:
+                results[module.module_id] = await module.apply_presence(mood_text, kind=kind)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logging.getLogger(__name__).warning(
+                    "event=presence_apply_failed module=%s kind=%s error=%s",
+                    module.module_id,
+                    kind,
+                    type(exc).__name__,
+                )
+        return results or None
+
     def schedules_for(self, module):
         slots = module.schedules()
         extra = self._owner_slots.get(module.module_id)
         return (*slots, extra) if extra else slots
 
+    def _settings(self):
+        if self.owner_delivery is not None and getattr(self.owner_delivery, "s", None) is not None:
+            return self.owner_delivery.s
+        for module in self._modules.values():
+            if getattr(module, "settings", None) is not None:
+                return module.settings
+        return None
+
     def normalize_recipient(self, scope: str) -> str | None:
-        if self.owner_delivery and self.owner_delivery.external_scope(scope):
-            return scope
+        raw = str(scope or "").strip()
+        if not raw or raw.startswith("channel:"):
+            return None
+        if self.owner_delivery and self.owner_delivery.external_scope(raw):
+            return raw
+        if raw.startswith("boundowner:"):
+            settings = self._settings()
+            if settings is not None:
+                from ..social import resolve_owner_scope
+
+                matched = resolve_owner_scope(raw, settings)
+                if matched is not None:
+                    plat, _ = matched
+                    mod = self.chat_platforms.get(plat)
+                    if mod is not None and mod.inactive_reason is None:
+                        return raw
+            return None
+        if raw in {"owner", "owner_dm"}:
+            settings = self._settings()
+            if settings is not None:
+                from ..social import RecipientResolver
+
+                hit = RecipientResolver(settings, self).resolve_owner(raw)
+                if hit is not None:
+                    plat, _, canonical = hit
+                    mod = self.chat_platforms.get(plat)
+                    if mod is not None and mod.inactive_reason is None:
+                        return canonical
+                return None
         # Canonical addresses belong to one transport. Its checker also handles legacy aliases.
-        owner = self._recipients.get(scope.partition(":")[0])
+        owner = self._recipients.get(raw.partition(":")[0])
         providers = (
-            [owner] if owner else (module for module in self.all() if module.recipient_namespaces)
+            ([owner] if owner.inactive_reason is None else ())
+            if owner is not None
+            else (
+                module
+                for module in self.all()
+                if module.recipient_namespaces and module.inactive_reason is None
+            )
         )
         candidates = set()
         for module in providers:
-            canonical = module.normalize_recipient(scope)
+            canonical = module.normalize_recipient(raw)
             if canonical and self._recipients.get(canonical.partition(":")[0]) is module:
                 candidates.add(canonical)
         return candidates.pop() if len(candidates) == 1 else None
 
+    def _owner_delivery_enabled(self, config) -> bool:
+        social_mod = self.get("social_presence")
+        if social_mod is not None:
+            return bool(social_mod.scheduling(config).owner_delivery_enabled)
+        settings = self._settings()
+        return bool(
+            getattr(settings, "proactive_dm_enabled", True)
+            and getattr(config, "owner_delivery_enabled", True)
+        )
+
     def permits_recipient(self, scope: str, config) -> bool:
         if self.owner_delivery and self.owner_delivery.external_scope(scope):
             return self.owner_delivery.delivery_enabled
+        if isinstance(scope, str) and scope.startswith("boundowner:"):
+            settings = self._settings()
+            if settings is None:
+                return False
+            from ..social import resolve_owner_scope
+
+            matched = resolve_owner_scope(scope, settings)
+            if matched is None:
+                return False
+            plat, _ = matched
+            mod = self.chat_platforms.get(plat)
+            if mod is None or mod.inactive_reason is not None:
+                return False
+            return self._owner_delivery_enabled(config)
         module = self._recipients.get(scope.partition(":")[0])
         return bool(
             module and module.inactive_reason is None and module.permits_recipient(scope, config)

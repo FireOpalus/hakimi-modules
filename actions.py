@@ -57,6 +57,7 @@ class Action:
     run: Handler
     arguments: type[BaseModel] = NoArgs
     social: bool = False
+    proactive_speak: bool = False
     owner_only: bool = False
     budget_lane: Literal["patrol", "proactive"] | None = None
     # A previously attempted operation may have a durable result and need no further paid call.
@@ -72,6 +73,7 @@ class Action:
     unavailable: Callable[[], str | None] = lambda: None
     preflight: Callable[[dict, float, Any], Awaitable[GateDecision]] | None = None
     aliases: tuple[Alias, ...] = ()
+    name_aliases: tuple[str, ...] = ()
 
     def quota_rules(self) -> tuple[ActivityQuota, ...]:
         if self.quotas is not None:
@@ -85,12 +87,16 @@ class ActionCatalog:
         self.actions: dict[str, Action] = {}
         self.owners: dict[str, str] = {}
         self.aliases: dict[Alias, str] = {}
+        self.name_aliases: dict[str, str] = {}
 
     def install(self, module_id: str, actions: tuple[Action, ...]) -> None:
         names, aliases = set(self.actions), set(self.aliases)
+        name_aliases = set(self.name_aliases)
         for spec in actions:
-            if not NAME.fullmatch(spec.name) or spec.name in names:
+            if not NAME.fullmatch(spec.name) or spec.name in names or spec.name in name_aliases:
                 raise ValueError(f"invalid or duplicate action: {spec.name}")
+            if spec.proactive_speak and not spec.social:
+                raise ValueError("proactive_speak actions must be social")
             if "query" in spec.origins and (
                 spec.social or spec.owner_only or spec.budget_lane or spec.arguments is not NoArgs
             ):
@@ -104,10 +110,19 @@ class ActionCatalog:
                 if alias in aliases or alias[2] != spec.social:
                     raise ValueError(f"invalid or duplicate action alias: {alias}")
                 aliases.add(alias)
+            for alias_name in spec.name_aliases:
+                if (
+                    not NAME.fullmatch(alias_name)
+                    or alias_name in names
+                    or alias_name in name_aliases
+                ):
+                    raise ValueError(f"invalid or duplicate action name alias: {alias_name}")
+                name_aliases.add(alias_name)
         for spec in actions:
             self.actions[spec.name] = spec
             self.owners[spec.name] = module_id
             self.aliases.update(dict.fromkeys(spec.aliases, spec.name))
+            self.name_aliases.update(dict.fromkeys(spec.name_aliases, spec.name))
 
     def uninstall(self, module_id: str) -> None:
         """Remove all actions, owners, and aliases registered by module_id."""
@@ -119,18 +134,47 @@ class ActionCatalog:
             self.owners.pop(name, None)
         for alias in [key for key, target in self.aliases.items() if target in owned]:
             self.aliases.pop(alias, None)
+        for alias_name in [key for key, target in self.name_aliases.items() if target in owned]:
+            self.name_aliases.pop(alias_name, None)
+
+    def canonical_name(self, name: str | None) -> str | None:
+        if not name:
+            return None
+        if name in self.actions:
+            return name
+        if mapped := self.name_aliases.get(name):
+            return mapped
+        if "social.speak" in self.actions and name.endswith(".speak") and NAME.fullmatch(name):
+            return "social.speak"
+        return name
+
+    def get(self, name: str | None) -> Action | None:
+        canon = self.canonical_name(name)
+        return self.actions.get(canon or "")
 
     def old_name(self, ticket: dict) -> str | None:
-        return self.aliases.get(
+        mapped = self.aliases.get(
             (ticket["target_module"], ticket["action_type"], bool(ticket["target_scope"]))
         )
+        if mapped is not None:
+            return mapped
+        mod = ticket.get("target_module")
+        if (
+            "social.speak" in self.actions
+            and ticket.get("action_type") == "speak"
+            and bool(ticket.get("target_scope"))
+            and isinstance(mod, str)
+            and mod
+            and NAME.fullmatch(f"{mod}.speak")
+            and f"{mod}.speak" not in self.actions
+        ):
+            return "social.speak"
+        return None
 
     def resolve(self, ticket: dict, *, compatibility: bool = False) -> Action:
-        name = (
-            self.old_name(ticket)
-            if compatibility
-            else ticket.get("action_name") or self.old_name(ticket)
-        )
+        raw_name = ticket.get("action_name")
+        canon_raw = self.canonical_name(raw_name) if raw_name else None
+        name = self.old_name(ticket) if compatibility else (canon_raw or self.old_name(ticket))
         spec = self.actions.get(name or "")
         if not spec:
             raise ValueError("unknown_action")
@@ -140,7 +184,7 @@ class ActionCatalog:
             raise ValueError("action_origin_forbidden")
         if spec.social != bool(ticket.get("target_scope")):
             raise ValueError("invalid_action_audience")
-        if compatibility and ticket.get("action_name") not in (None, "", name):
+        if compatibility and raw_name not in (None, "", name) and canon_raw != name:
             raise ValueError("incompatible_action")
         return spec
 
