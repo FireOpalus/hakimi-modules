@@ -110,6 +110,7 @@ class BaseModule(ABC):
         yield
 
     chat_platforms: tuple[str, ...] = ()
+    supports_reply_anchor: bool = False
     supports_voice: bool = False
     preferred_voice_format: str = "ogg_opus"
     supports_presence: bool = False
