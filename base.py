@@ -116,6 +116,7 @@ class BaseModule(ABC):
     supports_sticker: bool = False
     supports_rich_card: bool = False
     supports_emoji_like: bool = False
+    supports_poke: bool = False
     supports_typing: bool = False
     supports_quick_ack: bool = False
     supports_presence: bool = False
@@ -240,8 +241,83 @@ class BaseModule(ABC):
     def permits_recipient(self, scope: str, config) -> bool:
         return True
 
+    def allowed_groups(self, platform: str | None = None) -> list[str]:
+        _ = platform
+        return []
+
     def proactive_groups(self) -> list[str]:
         return []
+
+    def channel_prompt(self, self_id: str, platform: str) -> str:
+        """Build a channel identity & capability prompt block from declared module flags."""
+        clean_platform = " ".join(clean_text(str(platform or "")).split()).strip()[:64] or "chat"
+        clean_self_id = " ".join(clean_text(str(self_id or "")).split()).strip()[:64]
+        account_note = f"（当前渠道账号标识：{clean_self_id}）" if clean_self_id else ""
+        is_qq_channel = clean_platform in {"onebot", "qq"}
+
+        supported: list[str] = []
+        unsupported: list[str] = []
+
+        if bool(getattr(self, "supports_sticker", False)):
+            supported.append(
+                "发本地表情包（可按语境从 meme_labels 白名单选填 sticker.label，私聊与群聊均可；"
+                "遇到好图可填 save_meme_label 收图）"
+            )
+        else:
+            unsupported.append("发本地表情包（sticker.label 必须留空）")
+
+        if bool(getattr(self, "supports_emoji_like", False)):
+            supported.append(
+                '给消息贴表情回应（可填 emoji_like，如"赞"/"爱心"/"猫猫"/'
+                '"思考"/"笑哭"/"庆祝"/"围观"）'
+            )
+        else:
+            unsupported.append("给消息贴表情回应（emoji_like 必须留空）")
+
+        if bool(getattr(self, "supports_reply_anchor", False)):
+            supported.append("引用回复指定消息（可从 allowed_reply_ids 选填 anchor.reply_id）")
+        else:
+            unsupported.append("引用回复指定消息（anchor.reply_id 必须留空）")
+
+        if bool(getattr(self, "supports_voice", False)):
+            supported.append(
+                "语音条与唱歌（上下文提供 voice_reply_available/song_catalog 时"
+                "可用 voice_text/sing_song）"
+            )
+        else:
+            unsupported.append("发送语音条或唱歌（voice_text/sing_song 必须留空）")
+
+        if bool(getattr(self, "supports_rich_card", False)):
+            supported.append("群聊长代码块/表格自动转图片卡片")
+        else:
+            unsupported.append("图片卡片渲染")
+
+        if bool(getattr(self, "supports_poke", False)):
+            supported.append("戳一戳（poke_qq）")
+        else:
+            unsupported.append("戳一戳（poke_qq 必须留空）")
+
+        if not is_qq_channel:
+            unsupported.append("QQ 专属艾特（anchor.mentions 必须留空）")
+
+        supported_line = (
+            f"当前渠道支持：{'；'.join(supported)}。\n"
+            if supported
+            else "当前渠道支持：纯文字气泡回复。\n"
+        )
+        unsupported_line = (
+            f"当前渠道不支持：{'；'.join(unsupported)}；严禁声称已执行未支持的操作。\n"
+            if unsupported
+            else ""
+        )
+        return (
+            "\n【固定自我身份与当前渠道】\n"
+            f"当前你在 {clean_platform} 频道以「吉米奈喵」{account_note}的身份聊天；"
+            "历史记录里的 assistant 就是你自己。\n"
+            + supported_line
+            + unsupported_line
+            + "真实身份与权限一律以末尾服务端验证的 [role=...] 为准。\n"
+        )
 
     def local_activity(
         self, context: dict, available: set[str], unfunded: bool
