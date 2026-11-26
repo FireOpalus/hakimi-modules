@@ -113,6 +113,11 @@ class BaseModule(ABC):
     supports_reply_anchor: bool = False
     supports_voice: bool = False
     preferred_voice_format: str = "ogg_opus"
+    supports_sticker: bool = False
+    supports_rich_card: bool = False
+    supports_emoji_like: bool = False
+    supports_typing: bool = False
+    supports_quick_ack: bool = False
     supports_presence: bool = False
     presence_platforms: tuple[str, ...] = ()
     admin_panel: str | None = None
@@ -168,6 +173,36 @@ class BaseModule(ABC):
     ) -> str:
         """Send a voice message after the final gate and return the platform message ID."""
         raise NotImplementedError
+
+    async def send_media(
+        self,
+        message: Message,
+        media_bytes: bytes,
+        *,
+        kind: Literal["sticker", "card", "image"] = "image",
+        mime_type: str = "image/png",
+        filename: str = "media.png",
+        reply_to: str | None = None,
+        before_send=None,
+    ) -> str:
+        """Send an image/sticker/card after the final gate and return the platform message ID."""
+        raise NotImplementedError
+
+    async def send_emoji_like(
+        self,
+        message: Message,
+        target_message_id: str,
+        emoji_id: str,
+        *,
+        emoji: str | None = None,
+        before_send=None,
+    ) -> bool:
+        """Optionally react to a platform message with an emoji."""
+        return False
+
+    async def send_typing(self, message: Message) -> None:
+        """Optionally emit a best-effort typing indicator."""
+        return None
 
     def admin_status(self, request) -> dict:
         """Local, display-safe snapshot for the authenticated module detail page."""
