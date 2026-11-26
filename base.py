@@ -123,6 +123,14 @@ class BaseModule(ABC):
         """Adapters that support unsolicited delivery report their live connection here."""
         return False
 
+    def bot_id_for(self, platform: str) -> str:
+        """Return the active bot account ID for this chat platform, if known."""
+        return ""
+
+    def offline_reason(self, platform: str) -> str:
+        """Return the stable deferral reason code when this chat platform is disconnected."""
+        return "plugin_disconnected"
+
     def presence_enabled(self) -> bool:
         """Return whether automatic public presence updates are currently enabled."""
         return False
@@ -338,7 +346,10 @@ class ModuleRegistry:
         self.public_event_observers = {}
         self.thinking_scenes = {scene.key: scene for scene in CORE_THINKING_SCENES}
         self._module_scenes: dict[str, tuple[str, ...]] = {}
-        self.catalog = ActionCatalog(self.inactive_reason)
+        self.catalog = ActionCatalog(
+            self.inactive_reason,
+            chat_platforms=lambda: self.chat_platforms.keys(),
+        )
         self.rule_owners: dict[str, str] = {}
         self.rules = {}
         self._recipients: dict[str, BaseModule] = {}
@@ -606,15 +617,33 @@ class ModuleRegistry:
                 candidates.add(canonical)
         return candidates.pop() if len(candidates) == 1 else None
 
-    def _owner_delivery_enabled(self, config) -> bool:
+    def owner_delivery_enabled(self, config, *, settings=None, engine=None) -> bool:
+        s = settings if settings is not None else self._settings()
+        if (
+            engine is not None
+            and not getattr(engine, "overridden", False)
+            and getattr(config, "module_settings", None)
+            == getattr(getattr(engine, "env_config", None), "module_settings", None)
+        ):
+            return bool(getattr(s, "proactive_dm_enabled", True))
         social_mod = self.get("social_presence")
         if social_mod is not None:
             return bool(social_mod.scheduling(config).owner_delivery_enabled)
-        settings = self._settings()
+        from .scheduling import SocialScheduleOptions
+
+        defaults = SocialScheduleOptions.from_settings(s).model_dump()
+        raw = (getattr(config, "module_settings", None) or {}).get("social_presence", {})
+        if raw:
+            return bool(
+                SocialScheduleOptions.model_validate({**defaults, **raw}).owner_delivery_enabled
+            )
         return bool(
-            getattr(settings, "proactive_dm_enabled", True)
+            getattr(s, "proactive_dm_enabled", True)
             and getattr(config, "owner_delivery_enabled", True)
         )
+
+    def _owner_delivery_enabled(self, config) -> bool:
+        return self.owner_delivery_enabled(config)
 
     def permits_recipient(self, scope: str, config) -> bool:
         if self.owner_delivery and self.owner_delivery.external_scope(scope):

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -82,8 +82,13 @@ class Action:
 
 
 class ActionCatalog:
-    def __init__(self, inactive_reason: Callable[[str], str | None] = lambda _: None):
+    def __init__(
+        self,
+        inactive_reason: Callable[[str], str | None] = lambda _: None,
+        chat_platforms: Callable[[], Iterable[str]] = lambda: (),
+    ):
         self.inactive_reason = inactive_reason
+        self._chat_platforms = chat_platforms
         self.actions: dict[str, Action] = {}
         self.owners: dict[str, str] = {}
         self.aliases: dict[Alias, str] = {}
@@ -145,7 +150,9 @@ class ActionCatalog:
         if mapped := self.name_aliases.get(name):
             return mapped
         if "social.speak" in self.actions and name.endswith(".speak") and NAME.fullmatch(name):
-            return "social.speak"
+            plat = name[:-6]
+            if plat in set(self._chat_platforms()) or (plat, "speak", True) in self.aliases:
+                return "social.speak"
         return name
 
     def get(self, name: str | None) -> Action | None:
@@ -165,6 +172,7 @@ class ActionCatalog:
             and bool(ticket.get("target_scope"))
             and isinstance(mod, str)
             and mod
+            and mod in set(self._chat_platforms())
             and NAME.fullmatch(f"{mod}.speak")
             and f"{mod}.speak" not in self.actions
         ):
